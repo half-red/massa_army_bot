@@ -3,14 +3,14 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = ""
+name = "massa_army_bot"
 authors = [
     {name = "half-red", email = "half-red@half-red.net"},
 ]
 maintainers = [
     {name = "half-red", email = "half-red@half-red.net"},
 ]
-description = ""
+description = "Massa Army helper bot"
 requires-python = ">=3.12"
 classifiers = [
     "Private :: Do Not Upload",
@@ -25,8 +25,8 @@ dynamic = ["version"]
 app = "app.app:main"
 
 [project.urls]
-HomePage = "https://github.com/half-red/"
-Repository = "https://github.com/half-red/.git"
+HomePage = "https://github.com/half-red/massa_army_bot"
+Repository = "https://github.com/half-red/massa_army_bot.git"
 
 [tool.setuptools_scm]
 version_scheme = "python-simplified-semver"
