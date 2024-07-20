@@ -1,0 +1,6 @@
+pytest
+pyright
+autopep8
+reorder-python-imports
+watchdog
+pre-commit

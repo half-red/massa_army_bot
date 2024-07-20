@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = ""
+authors = [
+    {name = "half-red", email = "half-red@half-red.net"},
+]
+maintainers = [
+    {name = "half-red", email = "half-red@half-red.net"},
+]
+description = ""
+requires-python = ">=3.12"
+classifiers = [
+    "Private :: Do Not Upload",
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+keywords = []
+dynamic = ["version"]
+
+[project.scripts]
+app = "app.app:main"
+
+[project.urls]
+HomePage = "https://github.com/half-red/"
+Repository = "https://github.com/half-red/.git"
+
+[tool.setuptools_scm]
+version_scheme = "python-simplified-semver"
+version_file = "src/app/_version.py"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+pythonpath = "src"
+testpaths = [ "tests" ]
+
+[tool.autopep8]
+max_line_length = 80
+ignore = ["E302", "E501", "E701", "W503"]
+in-place = true
+recursive = true
+
+[tool.pyright]
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+reportMissingImports = true
+reportMissingTypeArgument = true
