@@ -1,0 +1,8 @@
+VIRTUAL_ENV=virtualenv
+layout python python3.12
+export\
+  TG_API_ID=...\
+  TG_API_HASH="..."\
+  TG_BOT_TOKEN="..."\
+  TG_BOT_USERNAME="..."\
+  TG_LOG_CHANNEL="..."
