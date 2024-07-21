@@ -106,7 +106,7 @@ async def init_db(dbfile, delete_before=False):
         )
         await tx.execute(
             "CREATE UNIQUE INDEX idx_tw_posts "
-            "ON tw_posts (tw_username, tw_post_id);")
+            "ON tw_posts (tw_username, tw_post_id, tg_msg_chat);")
 
 chat_types = {}
 async def get_chat_type(event: events.NewMessage.Event):
@@ -122,7 +122,6 @@ async def get_chat_type(event: events.NewMessage.Event):
         chat_types[c_id] = "topics"
     else:
         chat_types[c_id] = "group"
-    print(f"{chat_types[c_id]=}")
     return chat_types[c_id]
 
 async def get_topic(event: events.NewMessage.Event):
@@ -224,8 +223,9 @@ def main():
                         "SELECT * "
                         "FROM tw_posts "
                         "WHERE tw_username = ? "
-                        "AND tw_post_id = ?",
-                        (tw_username, tw_post_id)
+                        "AND tw_post_id = ? "
+                        "AND tg_msg_chat = ?",
+                        (tw_username, tw_post_id, tg_msg_chat)
                     )
                     row = await cur.fetchone()
                     assert row

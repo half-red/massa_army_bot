@@ -22,6 +22,7 @@ def repr_args(args, kwargs):
 
 def repr_call(func, *args, _indent='', **kwargs):
     return tw.indent(f"{func.__qualname__}({repr_args(args, kwargs)})", _indent)
+
 def debuggable(func, proxy_root, func_is_dispatcher=False, indent=''):
     def wrapper(m, *a, debug=None, showresult=False, **kw):
         debug = proxy_root.debug if debug is None else debug
