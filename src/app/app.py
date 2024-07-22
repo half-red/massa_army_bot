@@ -134,6 +134,10 @@ async def init_db(dbfile, debug=False, delete_before=False):
             async for row in cur:
                 chat_id, topic_id, topic_name = row
                 _topicid2name_cache[(chat_id, topic_id)] = topic_name
+        async with tx.execute("SELECT * FROM raid_topics") as cur:
+            async for row in cur:
+                chat_id, topic_id = row
+                raid_topics[chat_id] = topic_id
 
 chat_types = {}
 async def get_chat_type(event: Event):
@@ -315,6 +319,7 @@ async def has_permission(event: Event, **perms):
             return False
     return True
 
+raid_topics = {}
 @hr.cmd(pattern="/set_raid_topic")
 async def set_raid_topic(event: Event):
     if await get_chat_type(event) != "topics":
@@ -327,17 +332,19 @@ async def set_raid_topic(event: Event):
     if not await has_permission(event,
                                 is_admin=True, change_info=True):
         return
-    tg_msg_topic, topic_name = await get_topic(event)
+    topic_id, topic_name = await get_topic(event)
     async with db.tx() as tx:
         await tx.execute(
             "INSERT INTO raid_topics (topic_chat, topic_id) "
             "VALUES (?, ?) "
             "ON CONFLICT (topic_chat) "
             "DO UPDATE SET topic_id = ?",
-            (event.chat_id, tg_msg_topic, tg_msg_topic))
+            (event.chat_id, topic_id, topic_id))
+    raid_topics[event.chat_id] = topic_id
     return await event.reply(
         "<i>Raid topic set to #%s</i>" % topic_name,
         parse_mode="html")
+
 
 @hr.cmd
 async def _(event: Event):
