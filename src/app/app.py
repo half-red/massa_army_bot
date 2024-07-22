@@ -319,33 +319,6 @@ async def has_permission(event: Event, **perms):
             return False
     return True
 
-raid_topics = {}
-@hr.cmd(pattern="/set_raid_topic")
-async def set_raid_topic(event: Event):
-    if await get_chat_type(event) != "topics":
-        return await event.reply("\n\n".join([
-            "<b>Error:</b>",
-            ("/set_raid_topic <i>can only be used in "
-             "group chats with topics enabled.</i>"),
-        ]),
-            parse_mode="html")
-    if not await has_permission(event,
-                                is_admin=True, change_info=True):
-        return
-    topic_id, topic_name = await get_topic(event)
-    async with db.tx() as tx:
-        await tx.execute(
-            "INSERT INTO raid_topics (topic_chat, topic_id) "
-            "VALUES (?, ?) "
-            "ON CONFLICT (topic_chat) "
-            "DO UPDATE SET topic_id = ?",
-            (event.chat_id, topic_id, topic_id))
-    raid_topics[event.chat_id] = topic_id
-    return await event.reply(
-        "<i>Raid topic set to #%s</i>" % topic_name,
-        parse_mode="html")
-
-
 @hr.cmd
 async def _(event: Event):
     text = to_html(event)
@@ -433,6 +406,32 @@ async def _(event: Event):
         await hr.tryf(event.delete)
         await asyncio.sleep(10)
         await hr.tryf(duplicates.delete)
+
+raid_topics = {}
+@hr.cmd(pattern="/set_raid_topic")
+async def set_raid_topic(event: Event):
+    if await get_chat_type(event) != "topics":
+        return await event.reply("\n\n".join([
+            "<b>Error:</b>",
+            ("/set_raid_topic <i>can only be used in "
+             "group chats with topics enabled.</i>"),
+        ]),
+            parse_mode="html")
+    if not await has_permission(event,
+                                is_admin=True, change_info=True):
+        return
+    topic_id, topic_name = await get_topic(event)
+    async with db.tx() as tx:
+        await tx.execute(
+            "INSERT INTO raid_topics (topic_chat, topic_id) "
+            "VALUES (?, ?) "
+            "ON CONFLICT (topic_chat) "
+            "DO UPDATE SET topic_id = ?",
+            (event.chat_id, topic_id, topic_id))
+    raid_topics[event.chat_id] = topic_id
+    return await event.reply(
+        "<i>Raid topic set to #%s</i>" % topic_name,
+        parse_mode="html")
 
 def main():
     hr.run(init=init_db, dbfile=dbfile)
