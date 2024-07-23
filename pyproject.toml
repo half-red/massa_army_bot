@@ -22,7 +22,7 @@ keywords = []
 dynamic = ["version"]
 
 [project.scripts]
-app = "app.app:main"
+massa_army_bot = "massa_army_bot.bot:main"
 
 [project.urls]
 HomePage = "https://github.com/half-red/massa_army_bot"
@@ -30,7 +30,7 @@ Repository = "https://github.com/half-red/massa_army_bot.git"
 
 [tool.setuptools_scm]
 version_scheme = "python-simplified-semver"
-version_file = "src/app/_version.py"
+version_file = "src/massa_army_bot/_version.py"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -11,9 +11,9 @@ RUN : \
 RUN : \
   && apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-dev \
-    python3.11-venv \
+    python3.12 \
+    python3.12-dev \
+    python3.12-venv \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
@@ -22,5 +22,5 @@ WORKDIR /src
 ENV PATH=/venv/bin/:$PATH
 COPY requirements.txt .
 RUN : \
-  && python3.11 -m venv /venv \
+  && python3.12 -m venv /venv \
   && pip --no-cache-dir --disable-pip-version-check install -r requirements.txt
