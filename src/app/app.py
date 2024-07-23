@@ -1,20 +1,27 @@
 import asyncio
+import logging
 import os
 import re
+import textwrap as tw
 from datetime import datetime
 from datetime import timezone as tz
 from functools import partial
+from functools import wraps
 from html import escape
 from pathlib import Path
+from pprint import pformat
 from traceback import format_exc
 
-from app.db import Database
+import aiosqlite
 from telethon import events
 from telethon import TelegramClient
 from telethon import types
 from telethon import utils
 from telethon.sessions.sqlite import sqlite3
 from telethon.tl.custom.message import Message
+
+logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
+                    level=logging.WARNING)
 
 Event = events.NewMessage.Event
 
@@ -23,7 +30,19 @@ sessions = datadir / "sessions"
 sessions.mkdir(exist_ok=True, parents=True)
 
 dbfile = datadir / "twitter_posts.sqlite3"
-db = Database()
+
+pf = partial(pformat, sort_dicts=False, width=35)
+
+sleep_time = 10
+
+def event2dict(obj):
+    if isinstance(obj, dict):
+        return {k: event2dict(v) for k, v in obj.items() if v}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(v for v in obj if v)
+    if hasattr(obj, "to_dict"):
+        return event2dict(obj.to_dict())
+    return obj
 
 class HalfRed:
     tg: TelegramClient
@@ -36,7 +55,10 @@ class HalfRed:
                                  api_hash=api_hash,
                                  **clientparams)
         self.tg.start(bot_token=bot_token)
-        self.log_channel = log_channel
+        try:
+            self.log_channel = int(log_channel)
+        except ValueError:
+            self.log_channel = log_channel
         self.commands = {}
 
     async def startup(self, init=None, *init_args, **init_kwargs):
@@ -48,16 +70,59 @@ class HalfRed:
         await self.log(
             "Connected as @%s" % username)
 
-    async def log(self, msg, file=None, *args, **kwargs):
-        fdate = datetime.now(tz=tz.utc).isoformat()
-        msg = "%s\n%s" % (fdate, msg)
+    async def log(self, text, file=None, *args, **kwargs):
+        fdate = datetime.now(tz=tz.utc).ctime()
+        text = "%s\n%s" % (fdate, text)
         if file:
-            msg = "%s\nfile:%s" % (msg, file)
-        print(msg)
+            text = "%s\nfile:%s" % (text, file)
+        print(text)
         return await self.tg.send_message(
-            self.log_channel, msg,
+            self.log_channel, text,
             file=file,  # type: ignore
             parse_mode="html", *args, **kwargs)
+
+    @staticmethod
+    def displayname(chat, showid=False, username=False):
+        if isinstance(chat, int):
+            if showid:
+                return f"<code>{chat}</code>"
+            else:
+                return ""
+        try:
+            if hasattr(chat, "username") and chat.username is not None and username:
+                name = f"@{chat.username}"
+            elif hasattr(chat, "title") and chat.title is not None:
+                name = chat.title
+            else:
+                fullname = chat.first_name + \
+                    (f" {chat.last_name}" if chat.last_name else "")
+                name = f"<a href='tg://user?id={chat.id}'>{fullname}</a>"
+            if showid:
+                return f"{name}(<code>{chat.id}</code>)"
+            else:
+                return name
+        except Exception as e:
+            print(f"Error {e}:\n{format_exc()}")
+            return f"<code>{chat.id}</code>"
+
+    async def get_title(self, event, **kwargs):
+        real_chat_id, _ = utils.resolve_id(event.chat_id)
+        topic_id, topic_name = await get_topic(event)
+        if topic_name is None:
+            topic_rep = ""
+        else:
+            topic_rep = topic_template % (
+                real_chat_id, topic_id, "#" + topic_name)
+        return "<b>[%s]\n%s</b>:" % (
+            "".join((self.displayname(await event.get_chat(), **kwargs),
+                     topic_rep)),
+            self.displayname(await event.get_sender(), **kwargs))
+
+    async def log_msg(self, event, msg):
+        title = await self.get_title(event, showid=True)
+        await self.log("%s\n%s\n└➤%s" % (title, to_html(event),
+                                         tw.indent(to_html(msg), "  ")),
+                       file=event.media if event.photo else None)
 
     def run(self, init=None, *init_args, **init_kwargs):
         with self.tg:
@@ -65,10 +130,20 @@ class HalfRed:
                 init=init, *init_args, **init_kwargs))
             self.tg.run_until_disconnected()
 
-    def cmd(self, func=None, /, **params):
+    def cmd(self, func=None, /, on=None, **params):
         if func is None:
-            return partial(self.cmd, **params)
-        return self.tg.on(events.NewMessage(**params))(func)
+            return partial(self.cmd, on=on, **params)
+        on = on or partial(events.NewMessage, incoming=True)
+
+        @self.tg.on(on(**params))
+        @wraps(func)
+        async def wrapper(event: Event):
+            try:
+                print(event.message.date.ctime())
+            except AttributeError:
+                print(datetime.now().ctime())
+            return await self.tryf(func, event)
+        return wrapper
 
     async def tryf(self, coro, *args, allow_exc=True, allow_excs=None,
                    **kwargs):
@@ -93,12 +168,18 @@ topic_chat: int
 topic_id: int
 topic_name: str
 
-async def init_db(dbfile, debug=False, delete_before=False):
-    await db.connect(dbfile, debug=debug, delete_before=delete_before)
-    async with db.tx() as tx:
-        await tx.execute(
+raid_topic: int
+
+async def init_db():
+    async with aiosqlite.connect(dbfile) as conn:
+        await conn.execute(
             "PRAGMA foreign_keys = ON")
-        await tx.execute(
+        async with conn.execute("PRAGMA journal_mode = WAL") as cur:
+            row = await cur.fetchone()
+            assert row is not None
+            mode, = row
+            assert mode == 'wal', "Could not enable WAL mode..."
+        await conn.execute(
             "CREATE TABLE IF NOT EXISTS tw_posts ("
             "tw_username TEXT NOT NULL, "
             "tw_post_id INTEGER NOT NULL, "
@@ -109,13 +190,13 @@ async def init_db(dbfile, debug=False, delete_before=False):
             "tg_msg_topic INTEGER, "
             "url TEXT)"
         )
-        await tx.execute(
+        await conn.execute(
             "CREATE TABLE IF NOT EXISTS topics ("
             "topic_chat INTEGER NOT NULL, "
             "topic_id INTEGER NOT NULL, "
             "topic_name TEXT NOT NULL)"
         )
-        await tx.execute(
+        await conn.execute(
             "CREATE TABLE IF NOT EXISTS raid_topics ("
             "topic_chat INTEGER NOT NULL UNIQUE, "
             "topic_id INTEGER NOT NULL, "
@@ -124,20 +205,21 @@ async def init_db(dbfile, debug=False, delete_before=False):
             "FOREIGN KEY (topic_id) "
             "REFERENCES topics (topic_id))"
         )
-        await tx.execute(
+        await conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_tw_posts "
             "ON tw_posts (tw_username, tw_post_id, tg_msg_chat)")
-        await tx.execute(
+        await conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_topics "
             "ON topics (topic_chat, topic_id)")
-        async with tx.execute("SELECT * FROM topics") as cur:
+        async with conn.execute("SELECT * FROM topics") as cur:
             async for row in cur:
                 chat_id, topic_id, topic_name = row
                 _topicid2name_cache[(chat_id, topic_id)] = topic_name
-        async with tx.execute("SELECT * FROM raid_topics") as cur:
+        async with conn.execute("SELECT * FROM raid_topics") as cur:
             async for row in cur:
                 chat_id, topic_id = row
                 raid_topics[chat_id] = topic_id
+        await conn.commit()
 
 chat_types = {}
 async def get_chat_type(event: Event):
@@ -159,7 +241,7 @@ async def first_reply(event: Event,
                       stop_at=None):
     while event.id is not stop_at:
         if not event.is_reply:
-            return None
+            return event
         event = await event.get_reply_message()
     return event
 
@@ -170,17 +252,18 @@ async def topicid2name(event: Event,
     key = (event.chat_id, topic_id)
     if key in _topicid2name_cache:
         return _topicid2name_cache[key]
-    if topic_id == 0:
+    if topic_id == 1:
         topic_name = "General"
     else:
         topic_name = (await first_reply(event, stop_at=topic_id)
                       ).action.title  # type: ignore
     try:
-        async with db.tx() as tx:
-            await tx.execute(
+        async with aiosqlite.connect(dbfile) as conn:
+            await conn.execute(
                 "INSERT INTO topics (topic_chat, topic_id, topic_name) "
                 "VALUES (?, ?, ?)",
                 (*key, topic_name))
+            await conn.commit()
         _topicid2name_cache[key] = topic_name
         return topic_name
     except sqlite3.IntegrityError:
@@ -196,7 +279,7 @@ async def get_topic(event: Event):
     msg: Message = event.message
     reply_to = msg.reply_to
     if not reply_to or not reply_to.forum_topic:  # type: ignore
-        topic_id = 0
+        topic_id = 1
         topic_name = await topicid2name(event, topic_id)
         return topic_id, topic_name
     topic_id = reply_to.reply_to_msg_id  # type: ignore
@@ -220,7 +303,7 @@ async def extract_info(event: Event):
     tg_msg_id = event.id
     url = None
     if not event.is_private:
-        url = f"https://t.me/c/{real_chat_id}/{tg_msg_id}"
+        url = msg_url_template % (real_chat_id, tg_msg_id)
     return (tg_msg_by, tg_msg_at,
             tg_msg_chat, (tg_msg_topic, topic_name), tg_msg_id,
             url)
@@ -241,11 +324,12 @@ def to_html(event: Event):
 def from_html(text):
     return parse_mode.parse(text)  # type: ignore
 
-inc_link_template = '<a href="%%s">%s</a>'
-dup_template = inc_link_template % 'Marked as duplicate'
-link_template = inc_link_template % '%s'
+link_template = '<a href="%s">%s</a>'
+dup_template = link_template % ('%s', 'Marked as duplicate')
 tw_url_template = "https://x.com/%s/status/%s"
 quote_template = "<blockquote>%s</blockquote>"
+msg_url_template = "https://t.me/c/%s/%s"
+topic_template = link_template % (msg_url_template, '%s')
 
 hr = HalfRed(username=os.environ["TG_BOT_USERNAME"],
              api_id=os.environ["TG_API_ID"],
@@ -253,31 +337,37 @@ hr = HalfRed(username=os.environ["TG_BOT_USERNAME"],
              bot_token=os.environ["TG_BOT_TOKEN"],
              log_channel=os.environ["TG_LOG_CHANNEL"])
 
-@hr.tg.on(events.Raw)  # type: ignore
-async def _(event: Event):
-    try:
-        msg = event.message
-        if not isinstance(msg, types.MessageService):
-            return
-        action = msg.action
-        if not isinstance(action, types.MessageActionTopicEdit):
-            return
-        topic_name = action.title
-
-        chat_id = utils.get_peer_id(
-            types.PeerChannel(msg.peer_id.channel_id))  # type: ignore
+@hr.cmd(on=events.Raw)
+async def _raw(event: Event):
+    if not hasattr(event, "message"):
+        return
+    msg = event.message
+    if not isinstance(msg, types.MessageService):
+        return
+    action = msg.action
+    if not isinstance(action, (types.MessageActionTopicEdit,
+                               types.MessageActionTopicCreate)):
+        return
+    topic_name = action.title
+    if topic_name is None:
+        # ignore topics close
+        return
+    chat_id = utils.get_peer_id(
+        types.PeerChannel(msg.peer_id.channel_id))  # type: ignore
+    if msg.reply_to:
         topic_id = msg.reply_to.reply_to_msg_id  # type: ignore
-        key = chat_id, topic_id
-        _topicid2name_cache[key] = topic_name
-        async with db.tx() as tx:
-            await tx.execute(
-                "INSERT INTO topics (topic_chat, topic_id, topic_name) "
-                "VALUES (?, ?, ?) "
-                "ON CONFLICT (topic_chat, topic_id) "
-                "DO UPDATE SET topic_name = ?",
-                (*key, topic_name, topic_name))
-    except Exception:
-        ...
+    else:
+        topic_id = msg.id  # type: ignore
+    key = chat_id, topic_id
+    _topicid2name_cache[key] = topic_name
+    async with aiosqlite.connect(dbfile) as conn:
+        await conn.execute(
+            "INSERT INTO topics (topic_chat, topic_id, topic_name) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT (topic_chat, topic_id) "
+            "DO UPDATE SET topic_name = ?",
+            (*key, topic_name, topic_name))
+        await conn.commit()
 
 missing = object()
 
@@ -303,7 +393,7 @@ async def has_permission(event: Event, **perms):
             raise AttributeError("Permission %s is missing" %
                                  perm_name)
         if user_perm != perm_value:
-            await event.reply(
+            res = await event.reply(
                 "\n\n".join([
                     "<b>Permission denied:</b>",
                     ("<i>To perform this action, "
@@ -316,21 +406,27 @@ async def has_permission(event: Event, **perms):
                     ),
                 ]),
                 parse_mode="html")
+            await asyncio.sleep(sleep_time)
+            await hr.tryf(hr.tg.delete_messages,
+                          chat_id, (event.id, res.id))
             return False
     return True
 
 @hr.cmd
-async def _(event: Event):
+async def _dedup(event: Event):
     text = to_html(event)
     if not text:
         return
+    if event.chat_id not in raid_topics:
+        return
     tg_msg_by, tg_msg_at, tg_msg_chat, topic, tg_msg_id, url = await extract_info(event)
     tg_msg_topic, topic_name = topic
-    print(f"{topic_name=}")
-    print(f"{url=}")
+    event_topic = tg_msg_topic
+    raid_topic = raid_topics[tg_msg_chat]
     response_ok = []
     response_duplicate = []
-    has_duplicates = False
+    match = ""
+    has_duplicates, has_more_text = False, False
     last_end, start, end = 0, 0, 0
     for m in twitter_url_pattern.finditer(text):
         if not m:
@@ -341,8 +437,8 @@ async def _(event: Event):
         tw_username = g["tw_username"]
         tw_post_id = g["tw_post_id"]
         try:
-            async with db.tx() as tx:
-                await tx.execute(
+            async with aiosqlite.connect(dbfile) as conn:
+                await conn.execute(
                     "INSERT INTO tw_posts ("
                     "tw_username, "
                     "tw_post_id, "
@@ -357,11 +453,15 @@ async def _(event: Event):
                      tg_msg_by, tg_msg_at,
                      tg_msg_chat, tg_msg_topic, tg_msg_id,
                      url))
+                await conn.commit()
             response_ok.append(text[last_end:end])
+            more_text = text[last_end:start]
+            if more_text.strip():
+                has_more_text = True
         except sqlite3.IntegrityError:
             has_duplicates = True
-            async with db.tx() as tx:
-                cur = await tx.execute(
+            async with aiosqlite.connect(dbfile) as conn:
+                cur = await conn.execute(
                     "SELECT * "
                     "FROM tw_posts "
                     "WHERE tw_username = ? "
@@ -375,66 +475,122 @@ async def _(event: Event):
                  tg_msg_by, tg_msg_at,
                  tg_msg_chat, tg_msg_id, tg_msg_topic,
                  url) = row
+            # if end != 0 and last_end != end:
+            more_text = text[last_end:start]
+            if more_text.strip():
+                has_more_text = True
             if event.is_private:
-                response_ok.append(
-                    text[last_end:start]
-                    + dup_template % escape(
+                response_ok.append("%s%s" % (
+                    more_text,
+                    dup_template % escape(
                         tw_url_template % (
                             tw_username,
-                            tw_post_id)))
+                            tw_post_id))))
             else:
-                response_ok.append(
-                    text[last_end:start]
-                    + dup_template % escape(url)
-                )
-            response_duplicate.append(
-                "%s\n" % (
-                    match))
+                response_ok.append("%s%s" % (
+                    more_text,
+                    dup_template % escape(url)))
+            response_duplicate.append("%s\n" % (
+                match))
         last_end = end
-    if has_duplicates:
-        if response_ok:
-            await event.reply(
-                "".join((*response_ok, text[end:])),
+    has_more_text = has_more_text or match and end != len(text)
+    response = "".join((*response_ok, text[end:]))
+    response = "\n".join((await hr.get_title(event), response))
+    if event_topic == raid_topic:
+        if has_duplicates:
+            if has_more_text:
+                await event.reply(response, parse_mode="html")
+            duplicates = await event.reply(
+                "\n\n".join([
+                    "Duplicate posts:",
+                    *(r.strip() for r in response_duplicate),
+                    "This message will self-destruct in %ss" % sleep_time
+                ]),
                 parse_mode="html")
-        duplicates = await event.reply(
-            "\n\n".join([
-                "Duplicate posts:",
-                *response_duplicate,
-                "This message will self-destruct in 10s"
-            ]),
-            parse_mode="html")
-        await hr.tryf(event.delete)
-        await asyncio.sleep(10)
-        await hr.tryf(duplicates.delete)
+            await asyncio.sleep(sleep_time)
+            await hr.tryf(hr.tg.delete_messages,
+                          event.chat_id, (event.id, duplicates.id))
 
-raid_topics = {}
+    elif not has_duplicates:
+        await hr.tg.send_message(
+            event.chat_id, response,
+            reply_to=raid_topic,
+            parse_mode="html")
+
+raid_topics: dict[int, int] = {}
 @hr.cmd(pattern="/set_raid_topic")
-async def set_raid_topic(event: Event):
+async def _set_raid_topic(event: Event):
     if await get_chat_type(event) != "topics":
-        return await event.reply("\n\n".join([
+        res = await event.reply("\n\n".join([
             "<b>Error:</b>",
             ("/set_raid_topic <i>can only be used in "
              "group chats with topics enabled.</i>"),
         ]),
             parse_mode="html")
-    if not await has_permission(event,
-                                is_admin=True, change_info=True):
+        await asyncio.sleep(sleep_time)
+        return await hr.tryf(hr.tg.delete_messages,
+                             event.chat_id, (event.id, res.id))
+    if not await has_permission(event, is_admin=True, change_info=True):
         return
     topic_id, topic_name = await get_topic(event)
-    async with db.tx() as tx:
-        await tx.execute(
+    async with aiosqlite.connect(dbfile) as conn:
+        await conn.execute(
             "INSERT INTO raid_topics (topic_chat, topic_id) "
             "VALUES (?, ?) "
             "ON CONFLICT (topic_chat) "
             "DO UPDATE SET topic_id = ?",
             (event.chat_id, topic_id, topic_id))
+        await conn.commit()
     raid_topics[event.chat_id] = topic_id
-    return await event.reply(
-        "<i>Raid topic set to #%s</i>" % topic_name,
+    real_chat_id, _ = utils.resolve_id(event.chat_id)
+    res = await event.reply(
+        "<i>Raid topic</i> set to <b>%s</b>" % topic_template % (
+            real_chat_id, topic_id, topic_name),
         parse_mode="html")
+    await hr.log_msg(event, res)
+    await asyncio.sleep(sleep_time)
+    await hr.tryf(hr.tg.delete_messages,
+                  event.chat_id, (event.id, res.id))
+
+@hr.cmd(pattern="/raid_topic")
+async def _raid_topic(event: Event):
+    if await get_chat_type(event) != "topics":
+        res = await event.reply("\n\n".join([
+            "<b>Error:</b>",
+            ("/raid_topic <i>can only be used in "
+             "group chats with topics enabled.</i>"),
+        ]),
+            parse_mode="html")
+        await asyncio.sleep(sleep_time)
+        return await hr.tryf(hr.tg.delete_messages,
+                             event.chat_id, (event.id, res.id))
+    if not await has_permission(event, is_admin=True, change_info=True):
+        return
+    chat_id = event.chat_id
+    if chat_id not in raid_topics:
+        res = await event.reply(
+            "\n\n".join((
+                "Raid topic is not set",
+                "Use /set_raid_topic in a topic to set it as raid topic",
+            )),
+            parse_mode="html")
+        await asyncio.sleep(sleep_time)
+        return await hr.tryf(hr.tg.delete_messages,
+                             chat_id, (event.id, res.id))
+    topic_id = raid_topics[chat_id]
+    topic_name = await topicid2name(event, topic_id)
+    real_chat_id, _ = utils.resolve_id(chat_id)
+    res = await event.reply(
+        "<i>Raid topic</i> is <b>%s</b>" % topic_template % (
+            real_chat_id, topic_id, topic_name),
+        parse_mode="html")
+    await hr.log_msg(event, res)
+    await asyncio.sleep(sleep_time)
+    await hr.tryf(hr.tg.delete_messages,
+                  chat_id, (event.id, res.id))
 
 def main():
-    hr.run(init=init_db, dbfile=dbfile)
+    hr.run(init=init_db)
 
 if __name__ == "__main__":
     main()
