@@ -426,11 +426,12 @@ async def _dedup(event: Event):
     response_ok = []
     response_duplicate = []
     match = ""
-    has_duplicates, has_more_text = False, False
+    has_duplicates, has_more_text, has_url = False, False, False
     last_end, start, end = 0, 0, 0
     for m in twitter_url_pattern.finditer(text):
         if not m:
             continue
+        has_url = True
         start, end = m.span()
         match = text[start:end]
         g = m.groupdict()
@@ -511,7 +512,7 @@ async def _dedup(event: Event):
             await hr.tryf(hr.tg.delete_messages,
                           event.chat_id, (event.id, duplicates.id))
 
-    elif not has_duplicates:
+    elif has_url and not has_duplicates:
         await hr.tg.send_message(
             event.chat_id, response,
             reply_to=raid_topic,
