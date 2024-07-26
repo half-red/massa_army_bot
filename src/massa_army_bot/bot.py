@@ -414,9 +414,38 @@ async def has_permission(event: Event, **perms):
             return False
     return True
 
+@hr.cmd(pattern=rf"^/ignore_duplicate(?:@{hr.username})?(?:\s+(?P<msg>.*))?")
+async def _ignore_duplicate(event: Event):
+    if not await has_permission(event, is_admin=True, change_info=True):
+        return
+    m = event.pattern_match
+    if not m:
+        return
+    g = m.groupdict()
+    msg = g["msg"]
+    if not msg:
+        res = await event.reply("\n\n".join([
+            "<b>Error:</b>",
+            "/ignore_duplicate <i>needs a message after the command</i>",
+        ]),
+            parse_mode="html")
+        await asyncio.sleep(sleep_time)
+        return await hr.tryf(hr.tg.delete_messages,
+                             event.chat_id, (event.id, res.id))
+    await dedup(event, ignore_duplicate=True,
+                ignore_prefix=r"/ignore_duplicate")
+    await hr.tryf(event.delete)
+    raise events.StopPropagation
+
 @hr.cmd
 async def _dedup(event: Event):
+    return await dedup(event)
+
+async def dedup(event: Event, ignore_duplicate=False,
+                ignore_prefix=None):
     text = to_html(event)
+    if ignore_prefix:
+        text = text.lstrip(ignore_prefix).lstrip("@%s" % hr.username).strip()
     if not text:
         return
     if event.chat_id not in raid_topics:
@@ -483,12 +512,17 @@ async def _dedup(event: Event):
             if more_text.strip():
                 has_more_text = True
             if event.is_private:
-                response_ok.append("%s%s" % (
-                    more_text,
-                    dup_template % escape(
-                        tw_url_template % (
-                            tw_username,
-                            tw_post_id))))
+                if ignore_duplicate:
+                    response_ok.append(text[last_end:end])
+                else:
+                    response_ok.append("%s%s" % (
+                        more_text,
+                        dup_template % escape(
+                            tw_url_template % (
+                                tw_username,
+                                tw_post_id))))
+            elif ignore_duplicate:
+                response_ok.append(text[last_end:end])
             else:
                 response_ok.append("%s%s" % (
                     more_text,
@@ -501,20 +535,21 @@ async def _dedup(event: Event):
     response = "\n".join((await hr.get_title(event), response))
     if event_topic == raid_topic:
         if has_duplicates:
-            if has_more_text:
+            if has_more_text or ignore_duplicate:
                 await event.reply(response, parse_mode="html")
-            duplicates = await event.reply(
-                "\n\n".join([
-                    "Duplicate posts:",
-                    *(r.strip() for r in response_duplicate),
-                    "This message will self-destruct in %ss" % sleep_time
-                ]),
-                parse_mode="html")
-            await asyncio.sleep(sleep_time)
-            await hr.tryf(hr.tg.delete_messages,
-                          event.chat_id, (event.id, duplicates.id))
+            if not ignore_duplicate:
+                duplicates = await event.reply(
+                    "\n\n".join([
+                        "Duplicate posts:",
+                        *(r.strip() for r in response_duplicate),
+                        "This message will self-destruct in %ss" % sleep_time
+                    ]),
+                    parse_mode="html")
+                await asyncio.sleep(sleep_time)
+                await hr.tryf(hr.tg.delete_messages,
+                              event.chat_id, (event.id, duplicates.id))
 
-    elif has_url and not has_duplicates:
+    elif has_url and (not has_duplicates or ignore_duplicate):
         await hr.tg.send_message(
             event.chat_id, response,
             reply_to=raid_topic,
