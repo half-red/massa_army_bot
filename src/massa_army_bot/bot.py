@@ -150,6 +150,8 @@ class HalfRed:
         try:
             return await coro(*args, **kwargs)
         except Exception as e:
+            if isinstance(e, events.StopPropagation):
+                raise
             txt = f"Error {e}:\n<pre><code class='language-python'>{format_exc()}</code></pre>"
             await self.log(txt)
             if not allow_exc and (allow_excs is None or type(e) in allow_excs):
