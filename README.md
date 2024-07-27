@@ -37,13 +37,13 @@ export\
   TG_BOT_USERNAME="..."\
   TG_LOG_CHANNEL="..."
 ```
-Variable        | Description         | Where to find/set
-======================================================================
-TG_API_ID       |                     | https://my.telegram.org
-TG_API_HASH     |                     | https://my.telegram.org
-TG_BOT_TOKEN    |                     | https://t.me/BotFather
-TG_BOT_USERNAME | username without @  | https://t.me/BotFather
-TG_LOG_CHANNEL  | username or chat id | id: /id with t.me/MissRose_bot
+| Variable        | Description         | Where to find/set              |
+|-----------------|---------------------|--------------------------------|
+| TG_API_ID       |                     | https://my.telegram.org        |
+| TG_API_HASH     |                     | https://my.telegram.org        |
+| TG_BOT_TOKEN    |                     | https://t.me/BotFather         |
+| TG_BOT_USERNAME | username without @  | https://t.me/BotFather         |
+| TG_LOG_CHANNEL  | username or chat id | id: /id with t.me/MissRose_bot |
 
 Then run
 ```sh
