@@ -60,10 +60,13 @@ class HalfRed:
         except ValueError:
             self.log_channel = log_channel
         self.commands = {}
+        me = self.tg.loop.run_until_complete(
+            self.tg.get_me())
+        assert me
+        self.me = me
 
     async def startup(self, init=None, *init_args, **init_kwargs):
-        me = await self.tg.get_me()
-        username = me.username  # type: ignore
+        username = self.me.username
         if init is not None:
             await init(*init_args, **init_kwargs)
         await self.tg.catch_up()
