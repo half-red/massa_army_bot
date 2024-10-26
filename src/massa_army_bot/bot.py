@@ -14,6 +14,7 @@ from traceback import format_exc
 
 import aiosqlite
 from telethon import events
+from telethon import errors
 from telethon import TelegramClient
 from telethon import types
 from telethon import utils
@@ -213,6 +214,14 @@ async def init_db():
             "REFERENCES topics (topic_id))"
         )
         await conn.execute(
+            "CREATE TABLE IF NOT EXISTS linked_chats ("
+            "linked_chat_id INTEGER NOT NULL, "
+            "chat_id INTEGER NOT NULL, "
+            "FOREIGN KEY (chat_id) "
+            "REFERENCES topics (topic_chat),"
+            "UNIQUE (chat_id, linked_chat_id))"
+        )
+        await conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_tw_posts "
             "ON tw_posts (tw_username, tw_post_id, tg_msg_chat)")
         await conn.execute(
@@ -222,10 +231,17 @@ async def init_db():
             async for row in cur:
                 chat_id, topic_id, topic_name = row
                 _topicid2name_cache[(chat_id, topic_id)] = topic_name
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_linked_chats "
+            "ON linked_chats (chat_id, linked_chat_id)")
         async with conn.execute("SELECT * FROM raid_topics") as cur:
             async for row in cur:
                 chat_id, topic_id = row
                 raid_topics[chat_id] = topic_id
+        async with conn.execute("SELECT * FROM linked_chats") as cur:
+            async for row in cur:
+                linked_chat_id, chat_id = row
+                linked_chats[linked_chat_id] = chat_id
         await conn.commit()
 
 chat_types = {}
@@ -444,6 +460,20 @@ async def _ignore_duplicate(event: Event):
 
 @hr.cmd
 async def _dedup(event: Event):
+    real_chat_id, _ = utils.resolve_id(event.chat_id)
+    if real_chat_id in linked_chats:
+        linked_chat_id = linked_chats[real_chat_id]
+        raid_topic = raid_topics.get(linked_chat_id, None)
+        if raid_topic:
+            await hr.tg.send_message(
+                linked_chat_id,
+                "%s\n%s" % (
+                    await hr.get_title(event),
+                    to_html(event),
+                ),
+                reply_to=raid_topic,
+                parse_mode="html")
+            raise events.StopPropagation
     return await dedup(event)
 
 async def dedup(event: Event, ignore_duplicate=False,
@@ -631,6 +661,75 @@ async def _raid_topic(event: Event):
     await asyncio.sleep(sleep_time)
     await hr.tryf(hr.tg.delete_messages,
                   chat_id, (event.id, res.id))
+
+linked_chats: dict[int, int] = {}
+pattern_linked_chat = (
+    r"(?:\s+(?P<chat_info>"
+        r"(?P<chat_id>\d+)"
+        r"|(?P<chat_username>@\w+)"
+        r"|(?P<chat_link>(?:https?://)?t\.me/\S+)"
+    "))?"
+)
+un = r"(?P<undo>un)?"
+@hr.cmd(pattern=rf"/{un}link_chat(?:@{hr.username})?{pattern_linked_chat}")
+async def _link_chat(event: Event):
+    if not await has_permission(event, is_admin=True, change_info=True):
+        return
+    g = event.pattern_match.groupdict()
+    undo = bool(g["undo"])
+    chat_info = g["chat_info"]
+    chat_link = chat_info
+    if g["chat_id"]:
+        linked_chat_id = int(g["chat_id"])
+        chat = await hr.tg.get_entity(linked_chat_id)
+        chat_link = f"t.me/{chat.username}"
+    elif chat_info:
+        if "+" in chat_info:
+            return await event.reply("Linked chat must be public")
+        if "@" in chat_info:
+            chat = await hr.tg.get_entity(chat_info)
+            chat_link = f"t.me/{chat.username}"
+        if g["chat_link"]:
+            chat_link = g["chat_link"]
+        chat = await hr.tg.get_entity(chat_info)
+        try:
+            await hr.tg.get_permissions(chat.id, hr.me.id)
+        except errors.UserNotParticipantError:
+            return await event.reply("Bot must be member of this chat")
+        linked_chat_id = chat.id
+    else:
+        return await event.reply("Invalid chat id")
+    event_chat_id, _ = utils.resolve_id(event.chat_id)
+    if linked_chat_id == event_chat_id:
+        return await event.reply("Cannot link to the same chat")
+    action = "Linked"
+    try:
+        async with aiosqlite.connect(dbfile) as conn:
+            if undo:
+                action = "Un" + action.lower()
+                await conn.execute(
+                    "DELETE FROM linked_chats "
+                    "WHERE chat_id = ? "
+                    "AND linked_chat_id = ?",
+                    (event.chat_id, linked_chat_id))
+                await conn.commit()
+                linked_chats.pop(linked_chat_id)
+            else:
+                await conn.execute(
+                    "INSERT INTO linked_chats (linked_chat_id, chat_id) "
+                    "VALUES (?, ?)",
+                    (linked_chat_id, event.chat_id))
+                await conn.commit()
+                linked_chats[linked_chat_id] = event.chat_id
+    except (sqlite3.IntegrityError, KeyError):
+        txt = f"Chat already {action.lower()}"
+        msg = await event.reply(txt)
+        return await hr.log_msg(event, msg)
+    linked_chat_title = hr.displayname(chat)
+    txt = f"{action} chat %s" % link_template % (
+            chat_link, linked_chat_title)
+    msg = await event.reply(txt, parse_mode="html")
+    await hr.log_msg(event, msg)
 
 def main():
     hr.run(init=init_db)
