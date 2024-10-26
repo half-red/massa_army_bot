@@ -85,7 +85,7 @@ class HalfRed:
             parse_mode="html", *args, **kwargs)
 
     @staticmethod
-    def displayname(chat, showid=False, username=False):
+    def displayname(chat, showid=False, username=False, clickable=False):
         if isinstance(chat, int):
             if showid:
                 return f"<code>{chat}</code>"
@@ -96,6 +96,8 @@ class HalfRed:
                 name = f"@{chat.username}"
             elif hasattr(chat, "title") and chat.title is not None:
                 name = chat.title
+                if clickable:
+                    name = link_template % ("t.me/%s" % chat.username, name)
             else:
                 fullname = chat.first_name + \
                     (f" {chat.last_name}" if chat.last_name else "")
@@ -117,7 +119,7 @@ class HalfRed:
             topic_rep = topic_template % (
                 real_chat_id, topic_id, "#" + topic_name)
         return "<b>[%s]\n%s</b>:" % (
-            "".join((self.displayname(await event.get_chat(), **kwargs),
+            "".join((self.displayname(await event.get_chat(), clickable=True, **kwargs),
                      topic_rep)),
             self.displayname(await event.get_sender(), **kwargs))
 
