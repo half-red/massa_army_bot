@@ -246,7 +246,7 @@ async def init_db():
 
 chat_types = {}
 async def get_chat_type(event: Event):
-    msg: Message = event.message
+    msg: Message = event.message if isinstance(event, Event) else event
     c_id = event.chat_id
     if c_id in chat_types:
         return chat_types[c_id]
@@ -299,7 +299,7 @@ async def get_topic(event: Event):
     chat_type = await get_chat_type(event)
     if chat_type != "topics":
         return None, None
-    msg: Message = event.message
+    msg: Message = event.message if isinstance(event, Event) else event
     reply_to = msg.reply_to
     if not reply_to or not reply_to.forum_topic:  # type: ignore
         topic_id = 1
@@ -465,7 +465,7 @@ async def _dedup(event: Event):
         linked_chat_id = linked_chats[real_chat_id]
         raid_topic = raid_topics.get(linked_chat_id, None)
         if raid_topic:
-            await hr.tg.send_message(
+            msg = await hr.tg.send_message(
                 linked_chat_id,
                 "%s\n%s" % (
                     await hr.get_title(event),
@@ -473,7 +473,7 @@ async def _dedup(event: Event):
                 ),
                 reply_to=raid_topic,
                 parse_mode="html")
-            raise events.StopPropagation
+            return await dedup(msg)
     return await dedup(event)
 
 async def dedup(event: Event, ignore_duplicate=False,
