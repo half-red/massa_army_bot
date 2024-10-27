@@ -119,10 +119,13 @@ class HalfRed:
         else:
             topic_rep = topic_template % (
                 real_chat_id, topic_id, "#" + topic_name)
+        chat_and_topic = "".join((self.displayname(await event.get_chat(), clickable=True, **kwargs),
+                     topic_rep))
+        if event.chat_id == event.sender_id:
+            return "<b>[%s]</b>:" % chat_and_topic
         return "<b>[%s]\n%s</b>:" % (
-            "".join((self.displayname(await event.get_chat(), clickable=True, **kwargs),
-                     topic_rep)),
-            self.displayname(await event.get_sender(), **kwargs))
+            chat_and_topic,
+            self.displayname(await event.get_sender(), **kwargs, clickable=True))
 
     async def log_msg(self, event, msg):
         title = await self.get_title(event, showid=True)
