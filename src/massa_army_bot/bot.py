@@ -476,11 +476,11 @@ async def _dedup(event: Event):
                 ),
                 reply_to=raid_topic,
                 parse_mode="html")
-            return await dedup(msg)
+            return await dedup(msg, ignore_duplicate=True, skip_repost=True)
     return await dedup(event)
 
 async def dedup(event: Event, ignore_duplicate=False,
-                ignore_prefix=None):
+                ignore_prefix=None, skip_repost=False):
     text = to_html(event)
     if ignore_prefix:
         text = text.lstrip(ignore_prefix).lstrip("@%s" % hr.username).strip()
@@ -571,6 +571,8 @@ async def dedup(event: Event, ignore_duplicate=False,
     has_more_text = has_more_text or match and end != len(text)
     response = "".join((*response_ok, text[end:]))
     response = "\n".join((await hr.get_title(event), response))
+    if skip_repost:
+        return
     if event_topic == raid_topic:
         if has_duplicates:
             if has_more_text or ignore_duplicate:
