@@ -257,7 +257,7 @@ async def get_chat_type(event: Event):
     assert chat
     if msg.is_private:
         chat_types[c_id] = "private"
-    elif chat.forum:
+    elif getattr(chat, "forum", False):
         chat_types[c_id] = "topics"
     else:
         chat_types[c_id] = "group"
